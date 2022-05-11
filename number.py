@@ -1,6 +1,7 @@
 """Support for Big Ass Fans number."""
 from __future__ import annotations
 
+from enum import Enum
 from typing import cast
 
 from aiobafi6 import Device
@@ -11,11 +12,18 @@ from homeassistant.components.number import (
     NumberEntityDescription,
     NumberMode,
 )
+from homeassistant.const import TIME_MINUTES
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, HALF_DAY_SECS, ONE_DAY_SECS, ONE_MIN_SECS, SPEED_RANGE
+from .const import (
+    DOMAIN,
+    HALF_DAY_MINS,
+    ONE_DAY_MINS,
+    ONE_MIN_SECS,
+    SPEED_RANGE,
+)
 from .entity import BAFEntity
 from .models import BAFData
 
@@ -26,19 +34,47 @@ MODES = {
     "light_auto_motion_timeout": NumberMode.SLIDER,
 }
 
+UNITS = {
+    "return_to_auto_timeout": TIME_MINUTES,
+    "motion_sense_timeout": TIME_MINUTES,
+    "light_return_to_auto_timeout": TIME_MINUTES,
+    "light_auto_motion_timeout": TIME_MINUTES,
+}
+
+
+class MinutesToFromSecondsConverter:
+
+    __slots__ = ()
+
+    def from_entity(self, value: float) -> float:
+        return round(value * ONE_MIN_SECS)
+
+    def to_entity(self, value: float) -> float:
+        return round(value / ONE_MIN_SECS, 1)
+
+
+MIN_TOFROM_SEC_CONVERTER = MinutesToFromSecondsConverter()
+
+CONVERTERS = {
+    "return_to_auto_timeout": MIN_TOFROM_SEC_CONVERTER,
+    "motion_sense_timeout": MIN_TOFROM_SEC_CONVERTER,
+    "light_return_to_auto_timeout": MIN_TOFROM_SEC_CONVERTER,
+    "light_auto_motion_timeout": MIN_TOFROM_SEC_CONVERTER,
+}
+
 FAN_NUMBER_DESCRIPTIONS = (
     NumberEntityDescription(
         key="return_to_auto_timeout",
         name="Return to Auto Timeout",
-        min_value=ONE_MIN_SECS,
-        max_value=HALF_DAY_SECS,
+        min_value=1,
+        max_value=HALF_DAY_MINS,
         entity_category=EntityCategory.CONFIG,
     ),
     NumberEntityDescription(
         key="motion_sense_timeout",
         name="Motion Sense Timeout",
-        min_value=ONE_MIN_SECS,
-        max_value=ONE_DAY_SECS,
+        min_value=1,
+        max_value=ONE_DAY_MINS,
         entity_category=EntityCategory.CONFIG,
     ),
     NumberEntityDescription(
@@ -68,15 +104,15 @@ LIGHT_NUMBER_DESCRIPTIONS = (
     NumberEntityDescription(
         key="light_return_to_auto_timeout",
         name="Light Return to Auto Timeout",
-        min_value=ONE_MIN_SECS,
-        max_value=HALF_DAY_SECS,
+        min_value=1,
+        max_value=HALF_DAY_MINS,
         entity_category=EntityCategory.CONFIG,
     ),
     NumberEntityDescription(
         key="light_auto_motion_timeout",
         name="Light Motion Sense Timeout",
-        min_value=ONE_MIN_SECS,
-        max_value=ONE_DAY_SECS,
+        min_value=1,
+        max_value=ONE_DAY_MINS,
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -109,14 +145,20 @@ class BAFNumber(BAFEntity, NumberEntity):
         super().__init__(device, f"{device.name} {description.name}")
         self._attr_unique_id = f"{self._device.mac_address}-{description.key}"
         self._attr_mode = MODES.get(description.key, NumberMode.BOX)
+        self._attr_unit_of_measurement = UNITS.get(description.key)
 
     @callback
     def _async_update_attrs(self) -> None:
         """Update attrs from device."""
-        self._attr_value = cast(
-            float, getattr(self._device, self.entity_description.key)
-        )
+        value = cast(float, getattr(self._device, self.entity_description.key))
+        conv = CONVERTERS.get(self.entity_description.key)
+        if conv is not None:
+            v = conv.to_entity(value)
+        self._attr_value = value
 
     async def async_set_value(self, value: float) -> None:
         """Set the value."""
+        conv = CONVERTERS.get(self.entity_description.key)
+        if conv is not None:
+            value = conv.to_entity(value)
         setattr(self._device, self.entity_description.key, int(value))
